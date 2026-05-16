@@ -26,38 +26,35 @@ static struct syscall_anchor anchors[] = {
 
 static unsigned long (*kallsyms_lookup_name_ptr)(const char *name);
 static unsigned long kaslr_offset_result = 0;
-static int kaslr_verified =0;
+static int kaslr_verified = 0;
 
 static struct proc_dir_entry *proc_entry;
 
-static int kaslr_proc_show(struct seq_file *m, void *v){
-        if (kaslr_verified == 1){
-                seq_printf(m,"0x%lx\n", kaslr_offset_result);
-        }
-        else if (kaslr_verified == -1){
-                seq_printf(m,"Mismatch of offsets.");
-        }
-        else if (kaslr_verified == -2){
-                seq_printf(m,"Couldnt resolve anchor at runtime.");
-        }
-        else{
-                seq_printf(m,"Unkown error occoured.");
-             }
-        return 0;
+static int kaslr_proc_show(struct seq_file *m, void *v)
+{
+    if (kaslr_verified == 1) {
+        seq_printf(m, "0x%lx\n", kaslr_offset_result);
+    } else if (kaslr_verified == -1) {
+        seq_printf(m, "Mismatch of offsets.\n");
+    } else if (kaslr_verified == -2) {
+        seq_printf(m, "Could not resolve anchor at runtime.\n");
+    } else {
+        seq_printf(m, "Unknown error occurred.\n");
+    }
+    return 0;
 }
 
-
-static int kaslr_proc_open(struct inode *inode, struct file *file){
-        return single_open(file, kaslr_proc_show,NULL);
+static int kaslr_proc_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, kaslr_proc_show, NULL);
 }
 
 static const struct proc_ops kaslr_proc_ops = {
-        .proc_open = kaslr_proc_open,
-        .proc_read = seq_read,
-        .proc_lseek = seq_lseek,
-        .proc_release = single_release,
+    .proc_open = kaslr_proc_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
 };
-
 
 static int resolve_kallsyms(void)
 {
@@ -66,13 +63,12 @@ static int resolve_kallsyms(void)
     };
 
     int ret = register_kprobe(&kp);
-    if (ret < 0) {
+    if (ret < 0)
         return ret;
-    }
-    
+
     kallsyms_lookup_name_ptr = (void *)kp.addr;
     unregister_kprobe(&kp);
-    
+
     return kallsyms_lookup_name_ptr ? 0 : -ENOENT;
 }
 
@@ -97,44 +93,48 @@ static int __init kaslr_finder_init(void)
     for (i = 0; i < ARRAY_SIZE(anchors); i++) {
         runtime_addr = (unsigned long)kallsyms_lookup_name_ptr(anchors[i].name);
         if (!runtime_addr) {
-            kaslr_verified = -2;
-            continue;
+            kaslr_verified = -2; // runtime lookup failed
+            break;
         }
 
         kaslr_offset = runtime_addr - anchors[i].static_addr;
-        
+
         if (matches == 0) {
             first_offset = kaslr_offset;
             matches++;
         } else {
-            if (kaslr_offset == first_offset) {
-                matches++;
+            if (kaslr_offset != first_offset) {
+                kaslr_verified = -1; // mismatch
+                break;
             } else {
-                kaslr_verified = -1;
+                matches++;
             }
         }
     }
 
-    if (kaslr_verified == 0 && matches == ARRAY_SIZE(anchors) && matches > 0) {
-        kaslr_offset_result = first_offset;
-        kaslr_verified = 1;
-    } else {
-        pr_err("KASLR Finder: KASLR Offset calculation is inconsistent or incomplete! A rootkit might be present.\n");
+    // Only calculate final offset if no errors were detected in the loop
+    if (kaslr_verified== 0) {
+        if (matches == ARRAY_SIZE(anchors)) {
+            kaslr_offset_result = first_offset;
+            kaslr_verified = 1; // success
+        } else {
+            pr_err("KASLR Finder: KASLR Offset calculation is inconsistent or incomplete! A rootkit might be present.\n");
+            kaslr_verified = -1;
+        }
     }
-    proc_entry = proc_create("kaslr_offset", 0444, NULL, &kaslr_proc_ops);
+
+    proc_entry = proc_create("kaslr_offset", 0444, NULL,&kaslr_proc_ops);
     if (!proc_entry) {
         pr_err("KASLR Finder: Failed to create /proc/kaslr_offset\n");
         return -ENOMEM;
     }
 
     pr_info("KASLR Finder: /proc/kaslr_offset created\n");
-
     return 0;
 }
 
 static void __exit kaslr_finder_exit(void)
 {
-    
     if (proc_entry)
         proc_remove(proc_entry);
     pr_info("KASLR Finder: module unloaded\n");
